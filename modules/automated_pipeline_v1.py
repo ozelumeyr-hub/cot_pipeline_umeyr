@@ -3,8 +3,6 @@ import pandas as pd
 import sqlite3
 from pathlib import Path
 
-from cot_pipeline_umeyr.modules.pipeline import soybeans_df, soybeans_positions_cot
-
 pd.set_option("display.max_rows", None)
 pd.set_option("display.max_columns", None)
 
@@ -17,43 +15,64 @@ OBJECTS_TO_DATETIME = ["report_date_as_yyyy_mm_dd"]
 DATABASE_PATH = Path("../data/processed/cot_cleandata.db")
 TABLE_NAME = "COT_DATA"
 
-request = requests.get(API_URL, params = API_PARAMS).json()
-cot_df = (pd.json_normalize(request))
+def get_data(url, params):
+    request = requests.get(url, params = params).json()
+    cot_df = (pd.json_normalize(request))
+    return cot_df
 
 
-for object_soon_int in OBJECTS_TO_INT:
-    cot_df[object_soon_int] = pd.to_numeric(cot_df[object_soon_int])
 
-for objects_soon_datetime in OBJECTS_TO_DATETIME:
-    cot_df[objects_soon_datetime] = pd.to_datetime(cot_df[objects_soon_datetime], format="ISO8601")
+def transform_data(cot_df, to_int, to_datetime):
+    for object_soon_int in to_int:
+        cot_df[object_soon_int] = pd.to_numeric(cot_df[object_soon_int])
+
+    for objects_soon_datetime in to_datetime:
+        cot_df[objects_soon_datetime] = pd.to_datetime(cot_df[objects_soon_datetime], format="ISO8601")
+    return cot_df
 
 
-cot_df["noncomm_positions_net_all"] = cot_df["noncomm_positions_long_all"] - cot_df["noncomm_positions_short_all"]
-cot_df["comm_positions_net_all"] = cot_df["comm_positions_long_all"] - cot_df["comm_positions_short_all"]
-cot_df["noncomm_positions_net_ratio_to_open_interest"] = cot_df["noncomm_positions_net_all"] / cot_df["open_interest_all"]
+def aggregate_data(cot_df):
+    cot_df["noncomm_positions_net_all"] = cot_df["noncomm_positions_long_all"] - cot_df["noncomm_positions_short_all"]
+    cot_df["comm_positions_net_all"] = cot_df["comm_positions_long_all"] - cot_df["comm_positions_short_all"]
+    cot_df["noncomm_positions_net_ratio_to_open_interest"] = cot_df["noncomm_positions_net_all"] / cot_df["open_interest_all"]
+    return cot_df
 
-soybeans_positions_cot = (cot_df[["id",
-                                  "cftc_contract_market_code",
-                                  "market_and_exchange_names",
-                                  "report_date_as_yyyy_mm_dd",
-                                  "noncomm_positions_net_all",
-                                  "comm_positions_net_all",
-                                  "noncomm_positions_net_ratio_to_open_interest"]])
+def soybeans_data(cot_df):
+    soybeans = (cot_df[["id",
+                                      "cftc_contract_market_code",
+                                      "market_and_exchange_names",
+                                      "report_date_as_yyyy_mm_dd",
+                                      "noncomm_positions_net_all",
+                                      "comm_positions_net_all",
+                                      "noncomm_positions_net_ratio_to_open_interest"]])
+    return soybeans
 
-DATABASE_PATH.parent.mkdir(parents = True, exist_ok = True)
-conn = sqlite3.connect(DATABASE_PATH)
-conn.execute(
-    ("CREATE TABLE IF NOT EXISTS COT_DATA(id "
-     "TEXT PRIMARY KEY, "
-     "cftc_contract_market_code TEXT, "
-     "market_and_exchange_names TEXT, "
-     "report_date_as_yyyy_mm_dd TEXT, "
-     "noncomm_positions_net_all INTEGER, "
-     "comm_positions_net_all INTEGER, "
-     "noncomm_positions_net_ratio_to_open_interest REAL)"))
-existing_ids = pd.read_sql_query("SELECT id FROM COT_DATA", con = conn)
-new_data = soybeans_positions_cot[~soybeans_positions_cot["id"].isin(existing_ids["id"])]
-df_to_sql = new_data.to_sql(name = TABLE_NAME, con = conn, if_exists = "append", index = False)
-conn.close()
+def load_data(soybeans,path, table):
+    path.parent.mkdir(parents = True, exist_ok = True)
+    conn = sqlite3.connect(path)
+    conn.execute(
+        (f"CREATE TABLE IF NOT EXISTS {table}(id "
+         "TEXT PRIMARY KEY, "
+         "cftc_contract_market_code TEXT, "
+         "market_and_exchange_names TEXT, "
+         "report_date_as_yyyy_mm_dd TEXT, "
+         "noncomm_positions_net_all INTEGER, "
+         "comm_positions_net_all INTEGER, "
+         "noncomm_positions_net_ratio_to_open_interest REAL)"))
+    existing_ids = pd.read_sql_query(f"SELECT id FROM {table}", con = conn)
+    new_data = soybeans[~soybeans["id"].isin(existing_ids["id"])]
+    df_to_sql = new_data.to_sql(name = table, con = conn, if_exists = "append", index = False)
+    conn.close()
+    return df_to_sql
+
+def run_pipeline():
+    cot_df = get_data(API_URL, API_PARAMS)
+    cot_df = transform_data(cot_df, OBJECTS_TO_INT, OBJECTS_TO_DATETIME)
+    cot_df = aggregate_data(cot_df)
+    soybeans_position_cot = soybeans_data(cot_df)
+    rows_written = load_data(soybeans_position_cot, DATABASE_PATH, TABLE_NAME)
+    print(f"Folgende Einträge fanden statt: {rows_written}")
+
+run_pipeline()
 
 
