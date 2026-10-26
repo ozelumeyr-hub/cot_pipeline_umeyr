@@ -2,6 +2,7 @@ import requests
 import pandas as pd
 import sqlite3
 from pathlib import Path
+import time
 
 pd.set_option("display.max_rows", None)
 pd.set_option("display.max_columns", None)
@@ -14,10 +15,13 @@ OBJECTS_TO_INT = ["comm_positions_long_all", "comm_positions_short_all", "trader
 OBJECTS_TO_DATETIME = ["report_date_as_yyyy_mm_dd"]
 DATABASE_PATH = Path("../data/processed/cot_cleandata.db")
 TABLE_NAME = "COT_DATA"
+RETRY_WAIT_SECONDS = 5
+MAX_ATTEMPTS = 3
 
 def get_data(url, params):
-    request = requests.get(url, params = params).json()
-    cot_df = (pd.json_normalize(request))
+    response = requests.get(url, params = params, timeout = 15)
+    response.raise_for_status()
+    cot_df = pd.json_normalize(response.json())
     return cot_df
 
 
@@ -66,13 +70,26 @@ def load_data(soybeans,path, table):
     return df_to_sql
 
 def run_pipeline():
-    cot_df = get_data(API_URL, API_PARAMS)
+    cot_df = None
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        try:
+            cot_df = get_data(API_URL, API_PARAMS)
+            break
+        except requests.exceptions.RequestException as error:
+            print(f"Could not reach Data: {error}")
+            print(f"Attempt No.: {attempt}")
+            if attempt < MAX_ATTEMPTS:
+                time.sleep(RETRY_WAIT_SECONDS)
+    if cot_df is None:
+        print(f"No Connection after {MAX_ATTEMPTS} Attempts!")
+        return
     cot_df = transform_data(cot_df, OBJECTS_TO_INT, OBJECTS_TO_DATETIME)
     cot_df = aggregate_data(cot_df)
     soybeans_position_cot = soybeans_data(cot_df)
     rows_written = load_data(soybeans_position_cot, DATABASE_PATH, TABLE_NAME)
     print(f"Folgende Einträge fanden statt: {rows_written}")
 
-run_pipeline()
+if __name__ == "__main__":
+    run_pipeline()
 
 
