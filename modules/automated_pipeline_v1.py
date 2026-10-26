@@ -3,6 +3,7 @@ import pandas as pd
 import sqlite3
 from pathlib import Path
 import time
+import logging
 
 pd.set_option("display.max_rows", None)
 pd.set_option("display.max_columns", None)
@@ -17,6 +18,15 @@ DATABASE_PATH = Path("../data/processed/cot_cleandata.db")
 TABLE_NAME = "COT_DATA"
 RETRY_WAIT_SECONDS = 5
 MAX_ATTEMPTS = 3
+LOGGING_PATH = Path("../logs/status.log")
+def setup_logging(logging_path):
+    logging_path.parent.mkdir(parents = True, exist_ok = True)
+
+    logging.basicConfig(
+        filename = logging_path,
+        level = logging.INFO,
+        format = "%(asctime)s | %(levelname)s | %(message)s"
+    )
 
 def get_data(url, params):
     response = requests.get(url, params = params, timeout = 15)
@@ -70,24 +80,25 @@ def load_data(soybeans,path, table):
     return df_to_sql
 
 def run_pipeline():
+    setup_logging(LOGGING_PATH)
     cot_df = None
     for attempt in range(1, MAX_ATTEMPTS + 1):
         try:
             cot_df = get_data(API_URL, API_PARAMS)
+            logging.info(f"Connection Successful after Attempt No.: {attempt}")
             break
         except requests.exceptions.RequestException as error:
-            print(f"Could not reach Data: {error}")
-            print(f"Attempt No.: {attempt}")
+            logging.warning(f"Attempt {attempt} of {MAX_ATTEMPTS} failed: {error}")
             if attempt < MAX_ATTEMPTS:
                 time.sleep(RETRY_WAIT_SECONDS)
     if cot_df is None:
-        print(f"No Connection after {MAX_ATTEMPTS} Attempts!")
+        logging.error(f"No Connection after {MAX_ATTEMPTS} Attempts")
         return
     cot_df = transform_data(cot_df, OBJECTS_TO_INT, OBJECTS_TO_DATETIME)
     cot_df = aggregate_data(cot_df)
     soybeans_position_cot = soybeans_data(cot_df)
     rows_written = load_data(soybeans_position_cot, DATABASE_PATH, TABLE_NAME)
-    print(f"Folgende Einträge fanden statt: {rows_written}")
+    logging.info(f"Number of rows written to database: {rows_written}")
 
 if __name__ == "__main__":
     run_pipeline()
