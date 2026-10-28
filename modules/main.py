@@ -2,13 +2,9 @@ import config as conf
 import extract
 import transform
 import load
-import pandas as pd
 import time
 import logging
 import requests
-
-pd.set_option("display.max_rows", None)
-pd.set_option("display.max_columns", None)
 
 def setup_logging(logging_path):
     logging_path.parent.mkdir(parents = True, exist_ok = True)
